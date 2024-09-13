@@ -40,22 +40,22 @@ const deployerAccount = await WalletClient.getAccountFromSecretKey(secretKey);
  *
  * After all deployments, it terminates the process.
  */
-// (async () => {
-//   await deploySC(
-//     publicApi, // JSON RPC URL
-//     deployerAccount, // account deploying the smart contract(s)
-//     [
-//       {
-//         data: readFileSync(path.join(__dirname, 'build', 'main.wasm')), // smart contract bytecode
-//         coins: fromMAS(0.1), // coins for deployment
-//         // args: new Args().addString('Test'), // arguments for deployment
-//       } as ISCData,
-//       // Additional smart contracts can be added here for deployment
-//     ],
-//     chainId,
-//     fees,
-//     maxGas,
-//     waitFirstEvent,
-//   );
-//   process.exit(0); // terminate the process after deployment(s)
-// })();
+(async () => {
+  await deploySC(
+    publicApi, // JSON RPC URL
+    deployerAccount, // account deploying the smart contract(s)
+    [
+      {
+        data: readFileSync(path.join(__dirname, 'build', 'main.wasm')), // smart contract bytecode
+        coins: fromMAS(0.1), // coins for deployment
+        // args: new Args().addString('Test'), // arguments for deployment
+      } as ISCData,
+      // Additional smart contracts can be added here for deployment
+    ],
+    chainId,
+    fees,
+    maxGas,
+    waitFirstEvent,
+  );
+  process.exit(0); // terminate the process after deployment(s)
+})();
