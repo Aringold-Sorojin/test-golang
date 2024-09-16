@@ -1,67 +1,49 @@
 package main
 
 import (
-	"bytes"
-	"crypto/ed25519"
-	"encoding/base64"
-	"encoding/json"
-	"fmt"
-	"io/ioutil"
 	"log"
-	"net/http"
+	"fmt"
+	"encoding/json"
+	"encoding/binary"
 	"strconv"
+	"unicode"
+    "unicode/utf8"
+    "bytes"
+	"net/http"
+	"github.com/edatts/go-massa"
 )
 
+type incrementByNRequest struct {
+	Increment int64 `json:"increment"`
+}
+
 const (
-	massaAPIURL = "https://test.massa.net/api/v2" // Use testnet URL
+	massaAPIURL = "https://buildnet.massa.net/api/v2:33035" // Use testnet URL
+	senderSecretKey = "S1VWZwi3hLzmBqGdb7m2aMurRcZAtKpHPKLcr3gJRV6NueZQZSk"
+	senderPassword = "password"
+	contractAddress="AS1WMGJdaHeAhZpcj93QgvQASwsrrwXhw7ZYJbLYHd7jmU2FV75i"
 )
 
 var (
-	contractAddress string
-	publicKey       ed25519.PublicKey
-	privateKey      ed25519.PrivateKey
+	massaClient = massa.NewClient()
+	apiClient = massa.NewApiClient()
+	senderAddr string
 )
 
-type RPCRequest struct {
-	JsonRPC string        `json:"jsonrpc"`
-	Method  string        `json:"method"`
-	Params  []interface{} `json:"params"`
-	ID      int           `json:"id"`
-}
-
-type RPCResponse struct {
-	JsonRPC string          `json:"jsonrpc"`
-	Result  json.RawMessage `json:"result"`
-	Error   *RPCError       `json:"error,omitempty"`
-	ID      int             `json:"id"`
-}
-
-type RPCError struct {
-	Code    int    `json:"code"`
-	Message string `json:"message"`
-}
-
-type incrementByNRequest struct {
-	Increment int `json:"increment"`
-}
-
 func main() {
-	contractAddress = "CONTRACT_ADDRESS"
+	massaClient.Init(massaAPIURL)
+	apiClient.Init(massaAPIURL)
+
+	senderAddr, _ = massaClient.ImportFromPriv(senderSecretKey, senderPassword)
 
 	// Load or generate keys
-	var err error
-	publicKey, privateKey, err = loadKeys()
-	if err != nil {
-		log.Fatalf("Failed to load keys: %v", err)
-	}
-
 	http.HandleFunc("/readCounter", enableCORS(readCounterHandler))
 	http.HandleFunc("/incrementByOne", enableCORS(incrementByOneHandler))
 	http.HandleFunc("/incrementByN", enableCORS(incrementByNHandler))
 
 	port := "8080"
 
-	fmt.Printf("Server starting on port %s...\n", port)
+	log.Printf("Server starting on port %s...\n", port)
 	if err := http.ListenAndServe(":"+port, nil); err != nil {
 		log.Fatal(err)
 	}
@@ -85,53 +67,92 @@ func enableCORS(next http.HandlerFunc) http.HandlerFunc {
 	}
 }
 
-func loadKeys() (ed25519.PublicKey, ed25519.PrivateKey, error) {
-	// In a real-world scenario, load these securely from environment or secure storage
-	privateKeyStr := "PRIVATE_KEY"
-	if privateKeyStr == "" {
-		return ed25519.GenerateKey(nil)
+func unicodeToASCIIString(input []byte) string {
+    var output bytes.Buffer
+    
+    for len(input) > 0 {
+        r, size := utf8.DecodeRune(input)
+        if r == utf8.RuneError {
+            input = input[1:]
+            continue
+        }
+        
+        if r <= 127 && unicode.IsPrint(r) {
+            output.WriteByte(byte(r))
+        }
+        
+        input = input[size:]
+    }
+    
+    return output.String()
+}
+
+func readCounter() (string, error) {
+	var params []byte
+
+	callData := massa.CallData{
+		Fee:            10_000_000,
+		MaxGas:         10_000_000,
+		Coins:          0,
+		TargetAddress:  contractAddress,
+		TargetFunction: "readCounter",
+		Parameter:      params,
 	}
-	privateKeyBytes, err := base64.StdEncoding.DecodeString(privateKeyStr)
+
+	res, err := apiClient.ReadSC(senderAddr, callData)
 	if err != nil {
-		return nil, nil, err
+		return "0", err
 	}
-	return ed25519.GenerateKey(bytes.NewReader(privateKeyBytes))
+
+	return unicodeToASCIIString(res), nil
 }
 
 func readCounterHandler(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
+	if r.Method != http.MethodGet {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
 
-	result, err := callSmartContract("readCounter", "")
+	result, err := readCounter()
 	if err != nil {
 		http.Error(w, fmt.Sprintf("Failed to read counter: %v", err), http.StatusInternalServerError)
 		return
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	w.Write(result)
+	w.Write(json.RawMessage(result))
 }
 
 func incrementByOneHandler(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
+	if r.Method != http.MethodGet {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
 
-	result, err := callSmartContract("incrementByOne", "")
+	counter, err := readCounter()
 	if err != nil {
-		http.Error(w, fmt.Sprintf("Failed to increase counter: %v", err), http.StatusInternalServerError)
+		http.Error(w, fmt.Sprintf("Failed to increase counter by one: %v", err), http.StatusInternalServerError)
 		return
 	}
 
+	current_counter, _ := strconv.ParseFloat(counter, 64)
+	counter = strconv.FormatInt(int64(current_counter) + 1, 10)
+
+	var params []byte
+
+	opId, err := massaClient.CallSC(senderAddr, contractAddress, "incrementByOne", params, 0)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	log.Printf("Operation ID: %s", opId)
+
 	w.Header().Set("Content-Type", "application/json")
-	w.Write(result)
+	w.Write(json.RawMessage(counter))
 }
 
 func incrementByNHandler(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
+	if r.Method != http.MethodGet {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
@@ -142,76 +163,25 @@ func incrementByNHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	result, err := callSmartContract("incrementByN", strconv.Itoa(req.Increment))
+	counter, err := readCounter()
 	if err != nil {
 		http.Error(w, fmt.Sprintf("Failed to increase counter by N: %v", err), http.StatusInternalServerError)
 		return
 	}
 
+	current_counter, _ := strconv.ParseFloat(counter, 64)
+	counter = strconv.FormatInt(int64(current_counter) + req.Increment, 10)
+
+	var params []byte
+	params = binary.LittleEndian.AppendUint32(params, uint32(req.Increment))
+
+	opId, err := massaClient.CallSC(senderAddr, contractAddress, "incrementByN", params, 0)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	log.Printf("Operation ID: %s", opId)
+
 	w.Header().Set("Content-Type", "application/json")
-	w.Write(result)
-}
-
-func callSmartContract(function string, parameter string) (json.RawMessage, error) {
-	transaction := map[string]interface{}{
-		"function":  function,
-		"parameter": parameter,
-		"address":   contractAddress,
-		"fee":       "100000", // Adjust as needed
-	}
-
-	// Serialize the transaction
-	transactionBytes, err := json.Marshal(transaction)
-	if err != nil {
-		return nil, fmt.Errorf("failed to marshal transaction: %v", err)
-	}
-
-	// Sign the transaction
-	signature := ed25519.Sign(privateKey, transactionBytes)
-
-	// Create the final transaction object
-	finalTransaction := map[string]interface{}{
-		"transaction":        transaction,
-		"creator_public_key": base64.StdEncoding.EncodeToString(publicKey),
-		"signature":          base64.StdEncoding.EncodeToString(signature),
-	}
-
-	// Send the transaction
-	return sendRPCRequest("execute_smart_contract", []interface{}{finalTransaction})
-}
-
-func sendRPCRequest(method string, params []interface{}) (json.RawMessage, error) {
-	rpcRequest := RPCRequest{
-		JsonRPC: "2.0",
-		Method:  method,
-		Params:  params,
-		ID:      1,
-	}
-
-	requestBody, err := json.Marshal(rpcRequest)
-	if err != nil {
-		return nil, fmt.Errorf("failed to marshal request: %v", err)
-	}
-
-	resp, err := http.Post(massaAPIURL, "application/json", bytes.NewBuffer(requestBody))
-	if err != nil {
-		return nil, fmt.Errorf("failed to send request: %v", err)
-	}
-	defer resp.Body.Close()
-
-	body, err := ioutil.ReadAll(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read response body: %v", err)
-	}
-
-	var rpcResponse RPCResponse
-	if err := json.Unmarshal(body, &rpcResponse); err != nil {
-		return nil, fmt.Errorf("failed to unmarshal response: %v", err)
-	}
-
-	if rpcResponse.Error != nil {
-		return nil, fmt.Errorf("RPC error: %s", rpcResponse.Error.Message)
-	}
-
-	return rpcResponse.Result, nil
+	w.Write(json.RawMessage(counter))
 }
