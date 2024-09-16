@@ -52,7 +52,7 @@ async function main() {
         targetAddress: contractAddress,
         functionName: "incrementByN",
         parameter: args.serialize(),
-        maxGas: BigInt(2100000),
+        maxGas: BigInt(10000000),
         coins: BigInt(0),
         fee: BigInt(10000000),
     });

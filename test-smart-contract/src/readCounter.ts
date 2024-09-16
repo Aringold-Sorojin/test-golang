@@ -24,6 +24,7 @@ const waitFirstEvent = true;
 
 // Create an account using the private keyc
 const baseAccount = await WalletClient.getAccountFromSecretKey(secretKey);
+console.log(baseAccount)
 
 // const client = new Client({providers: new IPro`publicApi});
 
